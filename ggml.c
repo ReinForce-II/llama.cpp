@@ -11803,23 +11803,34 @@ static void ggml_compute_forward_mul_mat(
         const size_t  desired_wsize = ne13*ne12*ne_plane*sizeof(float);
         UNUSED(desired_wsize);
 
-        if (params->type == GGML_TASK_TYPE_INIT) {
-            if (type != GGML_TYPE_F32) {
-                assert(params->wsize >= desired_wsize);
-                // parallelize by src0 rows
-                for (int64_t i13 = 0; i13 < ne13; i13++) {
-                    for (int64_t i12 = 0; i12 < ne12; i12++) {
-                        // broadcast src0 into src1 across 2nd,3rd dimension
-                        const int64_t i03 = i13/r3;
-                        const int64_t i02 = i12/r2;
+        if (params->type == GGML_TASK_TYPE_INIT) {            
+            assert(params->wsize >= desired_wsize);
+            // parallelize by src0 rows
+            for (int64_t i13 = 0; i13 < ne13; i13++) {
+                for (int64_t i12 = 0; i12 < ne12; i12++) {
+                    // broadcast src0 into src1 across 2nd,3rd dimension
+                    const int64_t i03 = i13/r3;
+                    const int64_t i02 = i12/r2;
 
-                        const void           *       x        = (char *)  src0->data    + i02*nb02          + i03*nb03;
-                              float          * const wdata    = (float *) params->wdata + i13*ne12*ne_plane + i12*ne_plane;
-                              ggml_to_float_t  const to_float = type_traits[type].to_float;
+                    const   void           *       x        = (char *)                  src0->data    + i02*nb02          + i03*nb03;
+                    const   float          *       y        = (float *) ((char *)       src1->data    + i12*nb12          + i13*nb13);
+                            float          * const wdata    = (float *)                 params->wdata + i13*ne12*ne_plane + i12*ne_plane;
+                            ggml_bf16_t    * const bx       = (ggml_bf16_t *) ((char *) wdata + desired_wsize);
+                            ggml_bf16_t    * const by       = (ggml_bf16_t *) ((char *) wdata + desired_wsize * 3 / 2);
+                            ggml_to_float_t  const to_float = type_traits[type].to_float;
 
-                        for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                    for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                        if (type != GGML_TYPE_F32) {
                             to_float((const char *) x + i01*nb01, wdata + i01*ne00, ne00);
+                            ggml_fp32_to_bf16_row(wdata + i01*ne00, bx + i01*ne00, ne00);
                         }
+                        else {
+                            ggml_fp32_to_bf16_row((const float *) x + i01*ne00, bx + i01*ne00, ne00);
+                        }
+                    }
+
+                    for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
+                        ggml_fp32_to_bf16_row((const float *) y + i11*ne10, by + i11*ne10, ne10);
                     }
                 }
             }
@@ -11838,18 +11849,13 @@ static void ggml_compute_forward_mul_mat(
         //const int64_t tgemm0 = ggml_perf_time_us();
         for (int64_t i13 = 0; i13 < ne13; i13++) {
             for (int64_t i12 = 0; i12 < ne12; i12++) {
-                const int64_t i03 = i13/r3;
-                const int64_t i02 = i12/r2;
+                const float * wdata = (float *)           params->wdata + i13*ne12*ne_plane + i12*ne_plane;
+                const void  * x     = (const char *)      wdata + desired_wsize;
+                const void  * y     = (const char *)      wdata + desired_wsize * 3 / 2;
+                      float * d     = (float *) ((char *) dst->data + i12*nb2  + i13*nb3);
 
-                const void  * x = (char *)            src0->data + i02*nb02 + i03*nb03;
-                const float * y = (float *) ((char *) src1->data + i12*nb12 + i13*nb13);
-                      float * d = (float *) ((char *)  dst->data + i12*nb2  + i13*nb3);
-
-                if (type != GGML_TYPE_F32) {
-                    x = (float *) params->wdata + i13*ne12*ne_plane + i12*ne_plane;
-                }
-
-                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                // cblas_sbgemm ?
+                cblas_gemm_bf16bf16f32(CblasRowMajor, CblasNoTrans, CblasTrans,
                           ne1, ne01, ne10,
                          1.0f,    y, ne10,
                                   x, ne00,
@@ -19801,6 +19807,12 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                             // take into account that src0 can be broadcasted into src1[2,3]
                             cur = ggml_type_size(GGML_TYPE_F32)
                                 * node->src[0]->ne[0]*node->src[0]->ne[1]
+                                * node->src[1]->ne[2]*node->src[1]->ne[3]
+                                + ggml_type_size(GGML_TYPE_BF16)
+                                * node->src[0]->ne[0]*node->src[0]->ne[1]
+                                * node->src[1]->ne[2]*node->src[1]->ne[3]
+                                + ggml_type_size(GGML_TYPE_BF16)
+                                * node->src[1]->ne[0]*node->src[1]->ne[1]
                                 * node->src[1]->ne[2]*node->src[1]->ne[3];
                         }
                     } else

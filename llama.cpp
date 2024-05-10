@@ -11513,7 +11513,7 @@ static int llama_decode_internal(
         // MoE Special Case: This logic applies when hparams.n_expert == 0, i.e. the model is NOT an MoE model. When an MoE is
         //                   being processed then Accelerate/BLAS will not be involved, so capping would limit performance.
         if (n_tokens >= 32 && hparams.n_expert == 0 && ggml_cpu_has_blas() && !ggml_cpu_has_gpublas()) {
-            n_threads = std::min(4, n_threads);
+            // n_threads = std::min(4, n_threads);
         }
 
         ggml_backend_sched_alloc_graph(lctx.sched, gf);
