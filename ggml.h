@@ -2409,6 +2409,7 @@ extern "C" {
 #define GGML_RESTRICT restrict
 #endif
     typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+    typedef void (*ggml_to_bf16_t)   (const void  * GGML_RESTRICT x, ggml_bf16_t * GGML_RESTRICT y, int64_t k);
     typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
     typedef void (*ggml_vec_dot_t)   (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx,
                                       const void * GGML_RESTRICT y, size_t by, int nrc);
@@ -2419,6 +2420,7 @@ extern "C" {
         size_t            type_size;
         bool              is_quantized;
         ggml_to_float_t   to_float;
+        ggml_to_bf16_t    to_bf16;
         ggml_from_float_t from_float;
         ggml_from_float_t from_float_reference;
         ggml_vec_dot_t    vec_dot;

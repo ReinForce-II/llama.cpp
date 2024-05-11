@@ -867,6 +867,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .type_size                = sizeof(block_iq4_nl),
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_iq4_nl,
+        .to_bf16                  = (ggml_to_bf16_t) dequantize_row_iq4_nl_bf16,
         .from_float               = quantize_row_iq4_nl,
         .from_float_reference     = (ggml_from_float_t)quantize_row_iq4_nl_reference,
         .vec_dot                  = ggml_vec_dot_iq4_nl_q8_0,
@@ -883,6 +884,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .type_size                = sizeof(block_iq4_xs),
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_iq4_xs,
+        .to_bf16                  = (ggml_to_bf16_t) dequantize_row_iq4_xs_bf16,
         .from_float               = quantize_row_iq4_xs,
         .from_float_reference     = (ggml_from_float_t)quantize_row_iq4_xs_reference,
         .vec_dot                  = ggml_vec_dot_iq4_xs_q8_K,
@@ -11803,7 +11805,7 @@ static void ggml_compute_forward_mul_mat(
         const size_t  desired_wsize = ne13*ne12*ne_plane*sizeof(float);
         UNUSED(desired_wsize);
 
-        if (params->type == GGML_TASK_TYPE_INIT) {            
+        if (params->type == GGML_TASK_TYPE_INIT) {
             assert(params->wsize >= desired_wsize);
             // parallelize by src0 rows
             for (int64_t i13 = 0; i13 < ne13; i13++) {
@@ -11818,14 +11820,21 @@ static void ggml_compute_forward_mul_mat(
                             ggml_bf16_t    * const bx       = (ggml_bf16_t *) ((char *) wdata + desired_wsize);
                             ggml_bf16_t    * const by       = (ggml_bf16_t *) ((char *) wdata + desired_wsize * 3 / 2);
                             ggml_to_float_t  const to_float = type_traits[type].to_float;
+                            ggml_to_bf16_t   const to_bf16  = type_traits[type].to_bf16;
 
                     for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
-                        if (type != GGML_TYPE_F32) {
-                            to_float((const char *) x + i01*nb01, wdata + i01*ne00, ne00);
-                            ggml_fp32_to_bf16_row(wdata + i01*ne00, bx + i01*ne00, ne00);
+                        if (type == GGML_TYPE_BF16) {
+                            memcpy((const ggml_bf16_t *) x + i01*ne00, bx + i01*ne00, ne00 * sizeof(ggml_bf16_t));
+                        }
+                        else if (type == GGML_TYPE_F32) {
+                            ggml_fp32_to_bf16_row((const float *) x + i01*ne00, bx + i01*ne00, ne00);
+                        }
+                        else if (to_bf16 != NULL) {
+                            to_bf16((const char *) x + i01*nb01, bx + i01*ne00, ne00);
                         }
                         else {
-                            ggml_fp32_to_bf16_row((const float *) x + i01*ne00, bx + i01*ne00, ne00);
+                            to_float((const char *) x + i01*nb01, wdata + i01*ne00, ne00);
+                            ggml_fp32_to_bf16_row(wdata + i01*ne00, bx + i01*ne00, ne00);
                         }
                     }
 
