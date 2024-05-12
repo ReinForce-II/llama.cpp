@@ -18,6 +18,7 @@
 
 // some compilers don't provide _mm256_set_m128i, e.g. gcc 7
 #define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
+#define MM512_SET_M256I(a, b) _mm512_inserti64x4     (_mm512_castsi256_si512(b), (a), 1)
 
 #if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__SSSE3__)
 // multiply int8_t, add results pairwise twice
@@ -9901,6 +9902,45 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * restrict s, size_t bs, const void *
     }
 
     *s = sumf;
+
+#elif defined __AVX512F__
+
+    const __m128i values128 = _mm_loadu_si128((const __m128i*)kvalues_iq4nl);
+    const __m256i values256 = _mm256_broadcastsi128_si256(values128);
+    const __m512i values512 = _mm512_broadcast_i64x4(values256);
+    const __m256i m4b       = _mm256_set1_epi8(0x0f);
+
+    __m512 accum = _mm512_setzero_ps();
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        uint16_t sh = x[ibl].scales_h;
+        __m512i sumi1 = _mm512_setzero_si512();
+        for (int ib = 0; ib < QK_K/32; ib += 2) {
+            const __m256i q4bits = _mm256_loadu_si256((const __m256i*)qs); qs += 32;
+            const __m512i q8b = _mm512_loadu_si512(q8); q8 += 64;
+            const __m512i q4bs = _mm512_shuffle_epi8(values512, MM512_SET_M256I(_mm256_and_si256(_mm256_srli_epi16(q4bits, 4), m4b),
+                                                                                _mm256_and_si256(q4bits, m4b)));
+            const __m512i q4b = _mm512_shuffle_i64x2(q4bs, q4bs, 0xD8);
+            const __m256i q4b_1 = _mm512_extracti64x4_epi64(q4b, 0);
+            const __m256i q4b_2 = _mm512_extracti64x4_epi64(q4b, 1);
+            const __m256i q8b_1 = _mm512_extracti64x4_epi64(q8b, 0);
+            const __m256i q8b_2 = _mm512_extracti64x4_epi64(q8b, 1);
+            const __m256i p16_1 = mul_add_epi8(q4b_1, q8b_1);
+            const __m256i p16_2 = mul_add_epi8(q4b_2, q8b_2);
+            const __m512i p16 = MM512_SET_M256I(p16_1, p16_2);
+            const int16_t ls1 = ((x[ibl].scales_l[ib/2] & 0xf) | ((sh << 4) & 0x30)) - 32;
+            const int16_t ls2 = ((x[ibl].scales_l[ib/2] >>  4) | ((sh << 2) & 0x30)) - 32;
+            sh >>= 4;
+            const __m512i ls  = MM512_SET_M256I(_mm256_set1_epi16(ls1), _mm256_set1_epi16(ls2));
+            const __m512i p = _mm512_madd_epi16(p16, ls);
+            sumi1 = _mm512_add_epi32(p, sumi1);
+        }
+        accum = _mm512_fmadd_ps(_mm512_set1_ps(GGML_FP16_TO_FP32(x[ibl].d)*y[ibl].d),
+                _mm512_cvtepi32_ps(sumi1), accum);
+    }
+
+    *s = _mm512_reduce_add_ps(accum);
 
 #elif defined __AVX2__
 
